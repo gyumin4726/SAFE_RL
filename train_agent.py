@@ -20,7 +20,7 @@ from smarts.core.agent_interface import NeighborhoodVehicles, RGB, OGM, Drivable
 
 from stable_baselines3.common.vec_env import DummyVecEnv  # Import DummyVecEnv
 
-sys.path.append('/home/kang/code/rndix/safehil-llm/Auto_Driving_Highway')
+sys.path.append('/home/20201914/safehil-llm/Auto_Driving_Highway')
 from scenario import Scenario
 from customTools import (
     getAvailableActions,
@@ -160,6 +160,10 @@ def train(env, agent, sce, toolModels):
     pbar = tqdm(total=MAX_NUM_EPOC)
     frame = 0
     
+    # Initialize reward tracking lists
+    reward_list = []
+    reward_mean_list = []
+    
     while epoc <= MAX_NUM_EPOC:
         reward_total = 0.0 
         error = 0.0 
@@ -241,11 +245,11 @@ def train(env, agent, sce, toolModels):
                    action[0] = 0.0
                    action = tuple(action)
 
-            # llm_response = ask_llm.send_to_chatgpt(action, formatted_info, sce)
-            # decision_content = llm_response.content
-            # print(llm_response)
-            # llm_suggested_action = extract_decision(decision_content)
-            llm_suggested_action = 'FASTER'
+            llm_response = ask_llm.send_to_chatgpt(action, formatted_info, sce)
+            decision_content = llm_response.content
+            print(llm_response)
+            llm_suggested_action = extract_decision(decision_content)
+            # llm_suggested_action = 'FASTER'  # 하드코딩 비활성화
             print(f"llm action: {llm_suggested_action}")
 
             env.env_method('set_llm_suggested_action', llm_suggested_action)
@@ -346,6 +350,19 @@ def train(env, agent, sce, toolModels):
 
     pbar.close()
     print('Complete')
+    
+    # Save final model after all epochs are completed
+    print(f'학습 완료! 최종 모델 저장 중... (에폭: {epoc})')
+    torch.save(agent.policy.state_dict(), os.path.join('trained_network/' + env_name,
+              name+'_final_memo'+str(MEMORY_CAPACITY)+'_epoc'+
+              str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
+              + str(seed)+'_'+env_name+'_actornet.pkl'))
+    torch.save(agent.critic.state_dict(), os.path.join('trained_network/' + env_name,
+              name+'_final_memo'+str(MEMORY_CAPACITY)+'_epoc'+
+              str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
+              + str(seed)+'_'+env_name+'_criticnet.pkl'))
+    
+    print('최종 모델 저장 완료! (Actor + Critic 네트워크)')
     return save_threshold
 
 # utils.py
