@@ -10,6 +10,7 @@ from tqdm import tqdm
 from itertools import count
 from collections import deque
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 sys.path.append('/home/kang/code/rndix/safehil-llm/SMARTS')
 from smarts.core.agent import AgentSpec
@@ -151,15 +152,32 @@ class MyHiWayEnv(gym.Env):
         valid_action_ids = [i for i, act in ACTIONS_ALL.items() if available.get(act, False)]
         return valid_action_ids
 
-def train(env, agent, sce, toolModels):
+def train(env, agent, sce, toolModels, start_epoch=0):
     save_threshold = 3.0
     trigger_reward = 3.0
     trigger_epoc = 400
     saved_epoc = 1
-    epoc = 0
+    epoc = start_epoch
     pbar = tqdm(total=MAX_NUM_EPOC)
     frame = 0
     
+    # 날짜별 저장 폴더 생성
+    date_str = datetime.now().strftime('%Y%m%d')
+    save_dir = os.path.join('trained_network', env_name, date_str)
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 체크포인트 파일 경로
+    checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{start_epoch}.pt')
+    
+    # 이전 체크포인트에서 reward 리스트 불러오기
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        reward_list = checkpoint.get('reward_list', [])
+        reward_mean_list = checkpoint.get('reward_mean_list', [])
+    else:
+        reward_list = []
+        reward_mean_list = []
+
     # Initialize reward tracking lists
     reward_list = []
     reward_mean_list = []
@@ -299,9 +317,22 @@ def train(env, agent, sce, toolModels):
                     reward_list.append(max(-15.0, reward_total))
                     reward_mean_list.append(np.mean(reward_list[-10:]))
                 
+                    # 5 에폭마다 체크포인트 저장
+                    if epoc % 5 == 0:
+                        checkpoint = {
+                            'epoch': epoc,
+                            'actor_state_dict': agent.policy.state_dict(),
+                            'critic_state_dict': agent.critic.state_dict(),
+                            'reward_list': reward_list,
+                            'reward_mean_list': reward_mean_list
+                        }
+                        # 새로운 체크포인트 파일 경로
+                        checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoc}.pt')
+                        torch.save(checkpoint, checkpoint_path)
+                        print(f'\n체크포인트 저장 완료 (에폭 {epoc})')
+
                     ###### Evaluating the performance of current model ######
                     if reward_mean_list[-1] >= trigger_reward and epoc > trigger_epoc:
-                        # trigger_reward = reward_mean_list[-1]
                         print("Evaluating the Performance.")
                         avg_reward, _, _, _, _ = evaluate(env, agent, EVALUATION_EPOC)
                         trigger_reward = avg_reward
@@ -309,14 +340,12 @@ def train(env, agent, sce, toolModels):
                             print('Save the model at %i epoch, reward is: %f' % (epoc, avg_reward))
                             saved_epoc = epoc
                             
-                            torch.save(agent.policy.state_dict(), os.path.join('trained_network/' + env_name,
-                                      name+'_memo'+str(MEMORY_CAPACITY)+'_epoc'+
-                                      str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
-                                      + str(seed)+'_'+env_name+'_actornet.pkl'))
-                            torch.save(agent.critic.state_dict(), os.path.join('trained_network/' + env_name,
-                                      name+'_memo'+str(MEMORY_CAPACITY)+'_epoc'+
-                                      str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
-                                      + str(seed)+'_'+env_name+'_criticnet.pkl'))
+                            # 모델 저장 경로 수정
+                            actor_path = os.path.join(save_dir, f'actor_epoch_{epoc}.pkl')
+                            critic_path = os.path.join(save_dir, f'critic_epoch_{epoc}.pkl')
+                            
+                            torch.save(agent.policy.state_dict(), actor_path)
+                            torch.save(agent.critic.state_dict(), critic_path)
                             save_threshold = avg_reward
 
                 print('\n|Epoc:', epoc,
@@ -351,18 +380,13 @@ def train(env, agent, sce, toolModels):
     pbar.close()
     print('Complete')
     
-    # Save final model after all epochs are completed
-    print(f'학습 완료! 최종 모델 저장 중... (에폭: {epoc})')
-    torch.save(agent.policy.state_dict(), os.path.join('trained_network/' + env_name,
-              name+'_final_memo'+str(MEMORY_CAPACITY)+'_epoc'+
-              str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
-              + str(seed)+'_'+env_name+'_actornet.pkl'))
-    torch.save(agent.critic.state_dict(), os.path.join('trained_network/' + env_name,
-              name+'_final_memo'+str(MEMORY_CAPACITY)+'_epoc'+
-              str(MAX_NUM_EPOC) + '_step' + str(MAX_NUM_STEPS) + '_seed'
-              + str(seed)+'_'+env_name+'_criticnet.pkl'))
+    # 최종 모델 저장
+    final_actor_path = os.path.join(save_dir, 'actor_final.pkl')
+    final_critic_path = os.path.join(save_dir, 'critic_final.pkl')
+    torch.save(agent.policy.state_dict(), final_actor_path)
+    torch.save(agent.critic.state_dict(), final_critic_path)
+    print(f'\n최종 모델 저장 완료 (에폭 {epoc})')
     
-    print('최종 모델 저장 완료! (Actor + Critic 네트워크)')
     return save_threshold
 
 # utils.py
@@ -405,7 +429,30 @@ def extract_decision(response_content):
         print(f"결정 추출 중 오류: {e}")
         return None
 
-
+def find_latest_checkpoint(env_name):
+    """가장 최근 체크포인트를 찾는 함수"""
+    base_dir = os.path.join('trained_network', env_name)
+    if not os.path.exists(base_dir):
+        return None, 0
+    
+    # 날짜 폴더 찾기
+    date_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+    if not date_dirs:
+        return None, 0
+    
+    latest_date = sorted(date_dirs)[-1]  # 가장 최근 날짜
+    date_dir = os.path.join(base_dir, latest_date)
+    
+    # 체크포인트 파일 찾기
+    checkpoints = [f for f in os.listdir(date_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pt')]
+    if not checkpoints:
+        return None, 0
+    
+    # 가장 높은 에폭의 체크포인트 찾기
+    latest_checkpoint = sorted(checkpoints, key=lambda x: int(x.split('_epoch_')[1].split('.')[0]))[-1]
+    epoch = int(latest_checkpoint.split('_epoch_')[1].split('.')[0])
+    
+    return os.path.join(date_dir, latest_checkpoint), epoch
 
 
 if __name__ == "__main__":
@@ -504,10 +551,6 @@ if __name__ == "__main__":
         ###### Define agent specs ######
         agent_spec = AgentSpec(
             interface=agent_interface,
-            # observation_adapter=observation_adapter,
-            # reward_adapter=reward_adapter,
-            # action_adapter=action_adapter,
-            # info_adapter=info_adapter,
         )
         
         ######## Human Intervention through g29 or keyboard ########
@@ -539,6 +582,18 @@ if __name__ == "__main__":
                     GAMMA, ALPHA, POLICY_GUIDANCE, VALUE_GUIDANCE,
                     ADAPTIVE_CONFIDENCE, ENTROPY)
         
+        # 가장 최근 체크포인트 찾기
+        latest_checkpoint_path, start_epoch = find_latest_checkpoint(env_name)
+        if latest_checkpoint_path:
+            print(f"\n체크포인트를 불러오는 중... ({latest_checkpoint_path})")
+            checkpoint = torch.load(latest_checkpoint_path, weights_only=False)
+            agent.policy.load_state_dict(checkpoint['actor_state_dict'])
+            agent.critic.load_state_dict(checkpoint['critic_state_dict'])
+            print(f"체크포인트 불러오기 완료 (에폭 {start_epoch}부터 시작)")
+        else:
+            start_epoch = 0
+            print("체크포인트가 없습니다. 처음부터 학습을 시작합니다.")
+        
         arbitrator = Arbitrator()
         arbitrator.shared_control = SHARED_CONTROL
 
@@ -551,10 +606,9 @@ if __name__ == "__main__":
             isAccelerationConflictWithCar(sce),
             isKeepSpeedConflictWithCar(sce),
             isDecelerationSafe(sce),
-            # isActionSafe()
         ]
     
-        train(env, agent, sce, toolModels)
+        train(env, agent, sce, toolModels, start_epoch)
         
         legend_bar.append('seed'+str(seed))
         
