@@ -91,7 +91,7 @@ class MyHiWayEnv(gym.Env):
         llm_action = self.llm_suggested_action
     
         # 정확히 일치하는 경우
-        if action_name in llm_action:
+        if llm_action in action_name.split(", "):
             reward = 1.0
             print(f"✅ 액션 일치! 보상: {reward}")
             return reward
@@ -246,7 +246,7 @@ def train(env, agent, sce, toolModels):
                    action = tuple(action)
 
             llm_response = ask_llm.send_to_chatgpt(action, formatted_info, sce)
-            decision_content = llm_response.content
+            decision_content = llm_response
             print(llm_response)
             llm_suggested_action = extract_decision(decision_content)
             # llm_suggested_action = 'FASTER'  # 하드코딩 비활성화
