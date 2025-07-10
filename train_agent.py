@@ -22,6 +22,7 @@ from smarts.core.agent_interface import NeighborhoodVehicles, RGB, OGM, Drivable
 from stable_baselines3.common.vec_env import DummyVecEnv  # Import DummyVecEnv
 
 sys.path.append('/home/20201914/safehil-llm/Auto_Driving_Highway')
+sys.path.append('Auto_Driving_Highway')
 from scenario import Scenario
 from customTools import (
     getAvailableActions,
@@ -41,7 +42,15 @@ from drl_agent import DRL
 from keyboard import HumanKeyboardAgent
 from utils_ import soft_update, hard_update
 from authority_allocation import Arbitrator
-from main import observation_adapter, action_adapter, reward_adapter
+from main import observation_adapter, action_adapter, reward_adapter, evaluate  # evaluate 함수 추가
+
+# Load config
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+    
+AGENT_ID = 'AGENT-007'  # Default agent ID
+if 'AGENT_ID' in config:
+    AGENT_ID = config['AGENT_ID']
 
 class MyHiWayEnv(gym.Env):
     def __init__(self, screen_size, scenario_path, agent_specs, seed, vehicleCount,
@@ -334,7 +343,15 @@ def train(env, agent, sce, toolModels, start_epoch=0):
                     ###### Evaluating the performance of current model ######
                     if reward_mean_list[-1] >= trigger_reward and epoc > trigger_epoc:
                         print("Evaluating the Performance.")
-                        avg_reward, _, _, _, _ = evaluate(env, agent, EVALUATION_EPOC)
+                        # DummyVecEnv에서 실제 환경 가져오기
+                        real_env = env.envs[0] if hasattr(env, 'envs') else env
+                        avg_reward, _, _, _, _ = evaluate(real_env.env, agent, EVALUATION_EPOC, agent_id=AGENT_ID,
+                                                        observation_adapter=real_env.observation_adapter,
+                                                        max_steps=MAX_NUM_STEPS,
+                                                        env_name=config['env_name'],
+                                                        human=human,
+                                                        name=name,
+                                                        seed=seed)  # seed 변수 전달
                         trigger_reward = avg_reward
                         if avg_reward > save_threshold:
                             print('Save the model at %i epoch, reward is: %f' % (epoc, avg_reward))
@@ -512,7 +529,6 @@ if __name__ == "__main__":
     screen_size = config['screen_size']
     view = config['view']
     condition_state_dim = config['condition_state_dim']
-    AGENT_ID = config['AGENT_ID']
     
     # Create the network storage folders
     if not os.path.exists("./store/" + env_name):

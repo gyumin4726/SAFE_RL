@@ -71,7 +71,7 @@ def signedDistToLine(point, line_point, line_dir_vec) -> float:
     _sign = np.sign(np.dot(p - p1, line_normal))
     return d * _sign
 
-def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
+def evaluate(env_eval, agent, eval_episodes=10, epoch=0, agent_id='SafeHiL', observation_adapter=None, max_steps=300, env_name='straight', human=None, name='agent', seed=0):
     ep = 0
     success = int(0)
     avg_reward_list = []
@@ -81,10 +81,18 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
     offset_list_avg = []
     dist_list_avg = []
     
+    # Handle wrapped environments
+    if hasattr(env_eval, 'envs'):
+        env_eval = env_eval.envs[0]
+    
+    # Use provided observation_adapter or default one
+    obs_adapter = observation_adapter if observation_adapter is not None else globals()['observation_adapter']
+
     while ep < eval_episodes:
         obs = env_eval.reset()
-        obs = obs[AGENT_ID]
-        s = observation_adapter(obs)
+        if isinstance(obs, dict):
+            obs = obs[agent_id]
+        s = obs_adapter(obs)
         done = False
         reward_total = 0.0 
         frame_skip = 5
@@ -105,7 +113,7 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
 
         for t in count():
             
-            if t > MAX_NUM_STEPS:
+            if t > max_steps:  # MAX_NUM_STEPS를 max_steps로 변경
                 print('Max Steps Done.')
                 break
        
@@ -123,13 +131,16 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
                         action[0] = 0.0
                         action = tuple(action)
                 
-                action = {AGENT_ID:action}
+                action = {agent_id:action}
                 next_state, reward, done, info = env_eval.step(action)
-                obs = next_state[AGENT_ID]
-                s_ = observation_adapter(next_state[AGENT_ID])
-                curr_pos = next_state[AGENT_ID].ego_vehicle_state.position[:2]
+                if isinstance(next_state, dict):
+                    next_state = next_state[agent_id]
+                    done = done[agent_id]
+                obs = next_state
+                s_ = obs_adapter(next_state)
+                curr_pos = next_state.ego_vehicle_state.position[:2]
                 engage = int(0)
-                done = done[AGENT_ID]
+                
                 if env_name == 'straight' and (curr_pos[0] - initial_pos[0]) > 200:
                     done = True
                     print('Done')
@@ -137,8 +148,8 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
                     done = True
                     print('Done')
                 
-                r = reward_adapter(next_state[AGENT_ID], pos_list, a, engage, done=done)
-                pos_list.append(next_state[AGENT_ID].ego_vehicle_state.position[:2])
+                r = reward_adapter(next_state, pos_list, a, engage, done=done)
+                pos_list.append(next_state.ego_vehicle_state.position[:2])
                 action_list.append(a)       
                 s = s_
                 
@@ -173,31 +184,19 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
                    action[0] = 0.0
                    action = tuple(action)
             
-            action = {AGENT_ID:action}
-            
-            ####### G29 Interface ######
-            # pygame.event.get()
-            # print('g29!')
-            # steering = 0
-            # if js.get_button(4):
-            #     steering = 0.1
-            #     if js.get_button(10):
-            #         steering *= 1.5
-            # elif js.get_button(5):
-            #     steering = -0.1
-            #     if js.get_button(11):
-            #         steering *= 1.5
-            # time.sleep(0.2)
-            # action = {AGENT_ID:((-js.get_axis(2)+1)/2,(-js.get_axis(3)+1)/2, steering)} # G29 test
-            # print(action)
+            action = {agent_id:action}
             
             next_state, reward, done, info = env_eval.step(action)
-            obs = next_state[AGENT_ID]
-            s_ = observation_adapter(next_state[AGENT_ID])
-            curr_pos = next_state[AGENT_ID].ego_vehicle_state.position[:2]
-            print(next_state[AGENT_ID].ego_vehicle_state.speed)
+            if isinstance(next_state, dict):
+                next_state = next_state[agent_id]
+                done = done[agent_id]
+                info = info[agent_id]
+            obs = next_state
+            s_ = obs_adapter(next_state)
+            curr_pos = next_state.ego_vehicle_state.position[:2]
+            print(next_state.ego_vehicle_state.speed)
             engage = int(0)
-            done = done[AGENT_ID]
+            
             if env_name == 'straight' and (curr_pos[0] - initial_pos[0]) > 200:
                 done = True
                 print('Done')
@@ -205,11 +204,11 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
                 done = True
                 print('Done')
             
-            r = reward_adapter(next_state[AGENT_ID], pos_list, a, engage, done=done)
-            pos_list.append(next_state[AGENT_ID].ego_vehicle_state.position[:2])
+            r = reward_adapter(next_state, pos_list, a, engage, done=done)
+            pos_list.append(next_state.ego_vehicle_state.position[:2])
        
-            lane_name = info[AGENT_ID]['env_obs'].ego_vehicle_state.lane_id
-            lane_id = info[AGENT_ID]['env_obs'].ego_vehicle_state.lane_index
+            lane_name = info['env_obs'].ego_vehicle_state.lane_id
+            lane_id = info['env_obs'].ego_vehicle_state.lane_index
        
             reward_total += r
             action_list.append(a)
@@ -222,20 +221,20 @@ def evaluate(env_eval, agent, eval_episodes=10, epoch=0):
             v_list.append(ego_state.speed)
             steer_list.append(a[-1])
             
-            if human.slow_down:
+            if human is not None and human.slow_down:  # human이 None이 아닐 때만 체크
                 time.sleep(1/40)
             
             if done:
-                if not info[AGENT_ID]['env_obs'].events.off_road and \
-                    not info[AGENT_ID]['env_obs'].events.collisions:
+                if not info['env_obs'].events.off_road and \
+                    not info['env_obs'].events.collisions:
                     success += 1
                 
                 print('\n|Epoc:', ep,
                       '\n|Step:', t,
-                      '\n|Collision:', bool(len(info[AGENT_ID]['env_obs'].events.collisions)),
-                      '\n|Off Road:', info[AGENT_ID]['env_obs'].events.off_road,
-                      '\n|Goal:', info[AGENT_ID]['env_obs'].events.reached_goal,
-                      '\n|Off Route:', info[AGENT_ID]['env_obs'].events.off_route,
+                      '\n|Collision:', bool(len(info['env_obs'].events.collisions)),
+                      '\n|Off Road:', info['env_obs'].events.off_road,
+                      '\n|Goal:', info['env_obs'].events.reached_goal,
+                      '\n|Off Route:', info['env_obs'].events.off_route,
                       '\n|R:', reward_total,
                       '\n|Algo:', name,
                       '\n|seed:', seed,
@@ -480,7 +479,7 @@ def interaction(COUNTER):
                     if reward_mean_list[-1] >= trigger_reward and epoc > trigger_epoc:
                         # trigger_reward = reward_mean_list[-1]
                         print("Evaluating the Performance.")
-                        avg_reward, _, _, _, _ = evaluate(env, agent, EVALUATION_EPOC)
+                        avg_reward, _, _, _, _ = evaluate(env, agent, EVALUATION_EPOC, agent_id=AGENT_ID, env_name=env_name)
                         trigger_reward = avg_reward
                         if avg_reward > save_threshold:
                             print('Save the model at %i epoch, reward is: %f' % (epoc, avg_reward))
@@ -693,7 +692,7 @@ if __name__ == "__main__":
                       
             agent.policy.load_state_dict(torch.load('%s/%s_actornet.pkl' % (directory, filename)))
             agent.policy.eval()
-            reward, v_list_avg, offset_list_avg, dist_list_avg, avg_reward_list = evaluate(env, agent, eval_episodes=10)
+            reward, v_list_avg, offset_list_avg, dist_list_avg, avg_reward_list = evaluate(env, agent, eval_episodes=10, agent_id=AGENT_ID, env_name=env_name)
             
             print('\n|Avg Speed:', np.mean(v_list_avg),
                   '\n|Std Speed:', np.std(v_list_avg),
