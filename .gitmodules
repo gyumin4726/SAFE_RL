@@ -1,3 +1,1 @@
-[submodule "SMARTS"]
-	path = SMARTS
-	url = https://github.com/huawei-noah/SMARTS.git
+# SMARTS submodule 설정 제거됨
