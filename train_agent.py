@@ -180,7 +180,7 @@ def train(env, agent, sce, toolModels, start_epoch=0):
     
     # 이전 체크포인트에서 reward 리스트 불러오기
     if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
         reward_list = checkpoint.get('reward_list', [])
         reward_mean_list = checkpoint.get('reward_mean_list', [])
     else:
@@ -602,7 +602,7 @@ if __name__ == "__main__":
         latest_checkpoint_path, start_epoch = find_latest_checkpoint(env_name)
         if latest_checkpoint_path:
             print(f"\n체크포인트를 불러오는 중... ({latest_checkpoint_path})")
-            checkpoint = torch.load(latest_checkpoint_path, weights_only=False)
+            checkpoint = torch.load(latest_checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
             agent.policy.load_state_dict(checkpoint['actor_state_dict'])
             agent.critic.load_state_dict(checkpoint['critic_state_dict'])
             print(f"체크포인트 불러오기 완료 (에폭 {start_epoch}부터 시작)")
