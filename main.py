@@ -23,9 +23,9 @@ from collections import deque
 import matplotlib.pyplot as plt
 
 # sys.path.append('/home/oscar/Dropbox/SMARTS')
-sys.path.append('/home/kang/code/Safe-Human-in-the-Loop-RL/SMARTS')
+sys.path.append(os.path.join(os.path.dirname(__file__), 'SMARTS'))
 from smarts.core.agent import AgentSpec
-from smarts.env.hiway_env import HiWayEnv
+from smarts.env.gymnasium.hiway_env_v1 import HiWayEnvV1 as HiWayEnv
 from smarts.core.controllers import ActionSpaceType
 from smarts.core.agent_interface import AgentInterface
 from smarts.core.agent_interface import NeighborhoodVehicles, RGB, OGM, DrivableAreaGridMap, Waypoints
@@ -282,7 +282,7 @@ def observation_adapter(env_obs):
     return np.array(states, dtype=np.uint8)
 
 # reward function
-def reward_adapter(env_obs, pos_list, action, engage=False, done=False):
+def reward_adapter(env_obs, pos_list, action, engage=False, done=False, PENALTY_GUIDANCE=False):
     ego_obs = env_obs.ego_vehicle_state
     ego_pos = ego_obs.position[:2]
     lane_name = ego_obs.lane_id
@@ -313,7 +313,7 @@ def reward_adapter(env_obs, pos_list, action, engage=False, done=False):
         crash = 0.0
 
     if engage and PENALTY_GUIDANCE:
-        guidance = 0.0
+        guidance = -1.0  # 잘못된 개입에 대해 음수 패널티 적용
     else:
         guidance = 0.0
 

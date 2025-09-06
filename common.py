@@ -357,6 +357,7 @@ class Vehicle():
     def __init__(self, config_file):
         self.state = VehicleState() 
         self.param = VehicleParam(config_file)
+        self.action = VehicleAction()
 
     def steeringToSteeringAngle(self, steering):
         return - self.param.steering_coefficient * steering

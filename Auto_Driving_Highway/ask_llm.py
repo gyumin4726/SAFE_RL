@@ -14,30 +14,28 @@ with open(key_path, 'r', encoding='utf-8-sig') as f:
 API_KEY = api_key
 
 def get_action_info(action):
-    name = ''
-    description = ''
-
-    if action[2] < -0.1:
-        name += ACTIONS_ALL[0]
-        description += ACTIONS_DESCRIPTION[0]
-    elif action[2] > 0.1:
-        name += ACTIONS_ALL[1]
-        description += ACTIONS_DESCRIPTION[1]
+    throttle, brake, steering = action
+    if steering <= -0.1:
+        return "LANE_LEFT", "change direction to the left"
+    elif steering >= 0.1:
+        return "LANE_RIGHT", "change direction to the right"
+    elif throttle > 0.2:
+        return "FASTER", "accelerate the vehicle"
+    elif brake > 0.1:
+        return "SLOWER", "decelerate the vehicle"
+    elif throttle > 0.1:
+        return "IDLE", "remain in the current direction"
     else:
-        name += ACTIONS_ALL[2]
-        description += ACTIONS_DESCRIPTION[2]
+        return "IDLE", "remain in the current direction"
 
-    name += ', '
-    description += ', '
+# 디버깅용 함수: normalize_action
 
-    if action[0] > 0:
-        name += ACTIONS_ALL[3]
-        description += ACTIONS_DESCRIPTION[3]
-    else:
-        name += ACTIONS_ALL[4]
-        description += ACTIONS_DESCRIPTION[4]   
-
-    return name, description
+def normalize_action(val):
+    if isinstance(val, (set, list, tuple)):
+        val = list(val)[0] if val else ""
+    if isinstance(val, dict):
+        val = list(val.keys())[0] if val else ""
+    return str(val).strip().upper()
 
 def send_to_chatgpt(last_action, current_scenario, sce):
     genai.configure(api_key=API_KEY)

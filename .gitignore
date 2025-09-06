@@ -4,4 +4,6 @@ trained_network/
 Auto_Driving_Highway/MY_KEY.txt
 safehil
 venv39/
+venv39_win/
 __pycache__/
+results/

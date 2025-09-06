@@ -115,7 +115,7 @@ class Scenario:
             vehicle.updateProperty(x, y, vx, vy)
             self.vehicles[vid] = vehicle
             cur.execute(
-                '''INSERT INTO vehINFO VALUES (?,?,?,?,?,?,?);''',
+                '''INSERT OR REPLACE INTO vehINFO VALUES (?,?,?,?,?,?,?);''',
                 (self.frame, vid, x, y, lane_id, vx, vy)
             )
 

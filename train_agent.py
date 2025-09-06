@@ -11,17 +11,18 @@ from itertools import count
 from collections import deque
 import matplotlib.pyplot as plt
 from datetime import datetime
+import argparse
 
-sys.path.append('/home/kang/code/rndix/safehil-llm/SMARTS')
+sys.path.append(os.path.join(os.path.dirname(__file__), 'SMARTS'))
 from smarts.core.agent import AgentSpec
-from smarts.env.hiway_env import HiWayEnv
+from smarts.env.gymnasium.hiway_env_v1 import HiWayEnvV1 as HiWayEnv
 from smarts.core.controllers import ActionSpaceType
 from smarts.core.agent_interface import AgentInterface
 from smarts.core.agent_interface import NeighborhoodVehicles, RGB, OGM, DrivableAreaGridMap, Waypoints
 
 from stable_baselines3.common.vec_env import DummyVecEnv  # Import DummyVecEnv
 
-sys.path.append('/home/20201914/safehil-llm/Auto_Driving_Highway')
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Auto_Driving_Highway'))
 sys.path.append('Auto_Driving_Highway')
 from scenario import Scenario
 from customTools import (
@@ -97,15 +98,31 @@ class MyHiWayEnv(gym.Env):
         self.llm_suggested_action = action
     
     def calculate_custom_reward(self, action):
+        def normalize_action(val):
+            if isinstance(val, (set, list, tuple)):
+                val = list(val)[0] if val else ""
+            if isinstance(val, dict):
+                val = list(val.keys())[0] if val else ""
+            return str(val).strip().upper()
+
+        # get_action_info에 전달되는 action 벡터 출력
+        print(f"[DEBUG] get_action_info input action: {action} ({type(action)})")
+
         action_name, _ = ask_llm.get_action_info(action)
         llm_action = self.llm_suggested_action
-    
-        # 정확히 일치하는 경우
-        if llm_action in action_name.split(", "):
+
+        # 디버깅용 출력
+        print(f"[DEBUG] action_name: {action_name} ({type(action_name)})")
+        print(f"[DEBUG] llm_action: {llm_action} ({type(llm_action)})")
+        print(f"[DEBUG] normalize_action(action_name): {normalize_action(action_name)}")
+        print(f"[DEBUG] normalize_action(llm_action): {normalize_action(llm_action)}")
+
+        # robust 비교
+        if normalize_action(action_name) == normalize_action(llm_action):
             reward = 1.0
             print(f"✅ 액션 일치! 보상: {reward}")
             return reward
-    
+
         # 부분적으로 유사한 경우 (속도 관련 액션)
         speed_actions = ["FASTER", "SLOWER"]
         if (action_name in speed_actions and llm_action in speed_actions):
@@ -113,11 +130,6 @@ class MyHiWayEnv(gym.Env):
             print(f"⚠️ 액션 부분 일치! 보상: {reward}")
             return reward
 
-        if hasattr(self, '_debug_step') and self._debug_step:
-            if action_name in llm_action:
-                print(f"✅ 액션 일치! 보상: {reward}")
-        
-        # 일치하지 않는 경우
         print(f"❌ 액션 불일치! 보상: 0")
         return 0.0
     
@@ -233,18 +245,36 @@ def train(env, agent, sce, toolModels, start_epoch=0):
             guidance = False
 
             ##### Human-in-the-loop #######
-            if model != 'SAC' and human.intervention and epoc <= INTERMITTENT_THRESHOLD:
-                human_action = human.act()
+            print(f"epoc: {epoc}, INTERMITTENT_THRESHOLD: {INTERMITTENT_THRESHOLD}")
+            human_action = get_human_action()
+            print(f"human_action: {human_action}")
+            if human_action:
+                # 키보드 입력과 동일하게 액션 벡터로 변환
+                ACTION_VECTOR_MAP = {
+                    "LANE_LEFT":  [0.0, 0.0, -1.0],
+                    "IDLE":       [0.15, 0.0, 0.0],
+                    "LANE_RIGHT": [0.0, 0.0, 1.0],
+                    "FASTER":     [0.6, 0.0, 0.0],
+                    "SLOWER":     [0.0, 1.0, 0.0],
+                }
+                action_vec = ACTION_VECTOR_MAP.get(human_action, [0.0, 0.0, 0.0])
+                guidance = True
+                human_a = np.array(action_vec)
+                print(f"입력된 액션 '{human_action}'이(가) 반영되었습니다. (벡터: {action_vec})")
+            elif human.intervention:
+                # 기존 키보드 입력도 지원
+                # (여기에 기존 human.act() 코드 또는 키보드 입력 반영 코드 삽입)
+                human_a = np.array([human.throttle, human.steering_angle])
                 guidance = True
             else:
                 human_a = np.array([0.0, 0.0])
             
             ###### Assign final action ######
             if guidance:
-                if human_action[1] > human.MIN_BRAKE:
-                    human_a = np.array([-human_action[1], human_action[-1]])
+                if human_a[1] > human.MIN_BRAKE:
+                    human_a = np.array([-human_a[1], human_a[-1]])
                 else:
-                    human_a = np.array([human_action[0], human_action[-1]])
+                    human_a = np.array([human_a[0], human_a[-1]])
                 
                 if arbitrator.shared_control and epoc > CONTINUAL_THRESHOLD:
                     rl_authority, human_authority = arbitrator.authority(obs, rl_a, human_a)
@@ -261,16 +291,18 @@ def train(env, agent, sce, toolModels, start_epoch=0):
                 authority = 0.0 
 
             ##### Interaction #####
+            print(f"[DEBUG] before action_adapter: a = {a} ({type(a)})")
             action = action_adapter(a)
+            print(f"[DEBUG] after action_adapter: action = {action} ({type(action)})")
             
             ##### Safety Mask #####
             ego_state = obs.ego_vehicle_state
             lane_id = ego_state.lane_index
-            if ego_state.speed >= obs.waypoint_paths[lane_id][0].speed_limit and\
-               action[0] > 0.0:
-                   action = list(action)
-                   action[0] = 0.0
-                   action = tuple(action)
+            # if ego_state.speed >= obs.waypoint_paths[lane_id][0].speed_limit and\
+            #    action[0] > 0.0:
+            #        action = list(action)
+            #        action[0] = 0.0
+            #        action = tuple(action)
 
             llm_response = ask_llm.send_to_chatgpt(action, formatted_info, sce)
             decision_content = llm_response
@@ -284,6 +316,7 @@ def train(env, agent, sce, toolModels, start_epoch=0):
             # print(f"Observation: {next_obs}")
 
             action = {AGENT_ID:action}
+            print(f"[DEBUG] env.step에 전달되는 action: {action}")
 
             s_, custom_reward, done, info = env.step([action])
             custom_reward = custom_reward[0]
@@ -301,7 +334,7 @@ def train(env, agent, sce, toolModels, start_epoch=0):
                 done = True
                 print('Done')
             
-            r = reward_adapter(obs, pos_list, a, engage=engage, done=done)
+            r = reward_adapter(obs, pos_list, a, engage=engage, done=done, PENALTY_GUIDANCE=PENALTY_GUIDANCE)
             pos_list.append(curr_pos)
 
             ##### Store the transition in memory ######
@@ -433,7 +466,7 @@ def extract_decision(response_content):
             }
             
             # 매핑 시도
-            if raw_decision in {'FASTER', 'SLOWER', 'LEFT', 'IDLE', 'RIGHT'}:
+            if raw_decision in {'FASTER', 'SLOWER', 'LANE_LEFT', 'IDLE', 'LANE_RIGHT'}:
                 return raw_decision  # 이미 올바른 형식
             else:
                 mapped = decision_map.get(raw_decision)
@@ -471,11 +504,30 @@ def find_latest_checkpoint(env_name):
     
     return os.path.join(date_dir, latest_checkpoint), epoch
 
+def get_human_action():
+    print("get_human_action() 호출됨")
+    try:
+        with open("human_action.txt", "r") as f:
+            action = f.read().strip()
+        os.remove("human_action.txt")
+        print(f"읽은 액션: {action}")
+        return action
+    except FileNotFoundError:
+        return None
+
 
 if __name__ == "__main__":
 
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     warnings.filterwarnings(action="ignore", message="unclosed", category=ResourceWarning)
+
+    # Argument parser 추가
+    parser = argparse.ArgumentParser(description='Train or evaluate agent')
+    parser.add_argument('--mode', type=str, default='train', choices=['train', 'evaluation'], 
+                       help='Mode: train or evaluation')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                       help='Path to checkpoint file for evaluation')
+    args = parser.parse_args()
 
     plt.ion()
     
@@ -483,6 +535,10 @@ if __name__ == "__main__":
     yaml_path = os.path.join(path, 'config.yaml')
     with open(yaml_path) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
+    
+    # 명령줄 인자로 받은 mode를 config에 적용
+    if args.mode:
+        config['mode'] = args.mode
     
     ##### Individual parameters for each model ######
     model = 'SaHiL'
@@ -598,17 +654,21 @@ if __name__ == "__main__":
                     GAMMA, ALPHA, POLICY_GUIDANCE, VALUE_GUIDANCE,
                     ADAPTIVE_CONFIDENCE, ENTROPY)
         
-        # 가장 최근 체크포인트 찾기
-        latest_checkpoint_path, start_epoch = find_latest_checkpoint(env_name)
-        if latest_checkpoint_path:
-            print(f"\n체크포인트를 불러오는 중... ({latest_checkpoint_path})")
-            checkpoint = torch.load(latest_checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
-            agent.policy.load_state_dict(checkpoint['actor_state_dict'])
-            agent.critic.load_state_dict(checkpoint['critic_state_dict'])
-            print(f"체크포인트 불러오기 완료 (에폭 {start_epoch}부터 시작)")
+        # 평가 모드가 아닐 때만 초기 체크포인트 로딩
+        if mode != 'evaluation':
+            # 가장 최근 체크포인트 찾기
+            latest_checkpoint_path, start_epoch = find_latest_checkpoint(env_name)
+            if latest_checkpoint_path:
+                print(f"\n체크포인트를 불러오는 중... ({latest_checkpoint_path})")
+                checkpoint = torch.load(latest_checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
+                agent.policy.load_state_dict(checkpoint['actor_state_dict'])
+                agent.critic.load_state_dict(checkpoint['critic_state_dict'])
+                print(f"체크포인트 불러오기 완료 (에폭 {start_epoch}부터 시작)")
+            else:
+                start_epoch = 0
+                print("체크포인트가 없습니다. 처음부터 학습을 시작합니다.")
         else:
-            start_epoch = 0
-            print("체크포인트가 없습니다. 처음부터 학습을 시작합니다.")
+            start_epoch = 0  # 평가 모드에서는 start_epoch를 0으로 설정
         
         arbitrator = Arbitrator()
         arbitrator.shared_control = SHARED_CONTROL
@@ -624,7 +684,9 @@ if __name__ == "__main__":
             isDecelerationSafe(sce),
         ]
     
-        train(env, agent, sce, toolModels, start_epoch)
+        # 평가 모드가 아닐 때만 학습 실행
+        if mode != 'evaluation':
+            train(env, agent, sce, toolModels, start_epoch)
         
         legend_bar.append('seed'+str(seed))
         
@@ -651,9 +713,43 @@ if __name__ == "__main__":
                       str(max_epoc) + '_step' + str(max_steps) + \
                       '_seed' + str(seed) + '_' + env_name
                       
-            agent.policy.load_state_dict(torch.load('%s/%s_actornet.pkl' % (directory, filename)))
+            # 명령줄 인자로 받은 체크포인트 경로 사용
+            if args.checkpoint:
+                checkpoint_path = args.checkpoint
+                print(f"명령줄 인자로 받은 체크포인트를 불러옵니다: {checkpoint_path}")
+                if os.path.exists(checkpoint_path):
+                    checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
+                    agent.policy.load_state_dict(checkpoint['actor_state_dict'])
+                    agent.critic.load_state_dict(checkpoint['critic_state_dict'])
+                    print(f"체크포인트 불러오기 완료: {checkpoint_path}")
+                else:
+                    print(f"체크포인트 파일이 존재하지 않습니다: {checkpoint_path}")
+                    sys.exit(1)
+            else:
+                checkpoint_path = os.path.join(directory, filename)
+                if os.path.exists(checkpoint_path):
+                    print(f"기본 체크포인트를 불러옵니다: {checkpoint_path}")
+                    agent.policy.load_state_dict(torch.load(checkpoint_path, map_location=torch.device('cpu')))
+                else:
+                    latest_checkpoint_path, start_epoch = find_latest_checkpoint(env_name)
+                    if latest_checkpoint_path:
+                        print(f"\n체크포인트를 불러오는 중... ({latest_checkpoint_path})")
+                        checkpoint = torch.load(latest_checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
+                        agent.policy.load_state_dict(checkpoint['actor_state_dict'])
+                        agent.critic.load_state_dict(checkpoint['critic_state_dict'])
+                        print(f"체크포인트 불러오기 완료 (에폭 {start_epoch}부터 시작)")
+                    else:
+                        print("체크포인트가 없습니다.")
             agent.policy.eval()
-            reward, v_list_avg, offset_list_avg, dist_list_avg, avg_reward_list = evaluate(env, agent, eval_episodes=10)
+            # DummyVecEnv에서 실제 환경 가져오기
+            real_env = env.envs[0] if hasattr(env, 'envs') else env
+            reward, v_list_avg, offset_list_avg, dist_list_avg, avg_reward_list = evaluate(real_env.env, agent, eval_episodes=10, agent_id=AGENT_ID,
+                                                        observation_adapter=real_env.observation_adapter,
+                                                        max_steps=MAX_NUM_STEPS,
+                                                        env_name=config['env_name'],
+                                                        human=human,
+                                                        name=name,
+                                                        seed=seed)
             
             print('\n|Avg Speed:', np.mean(v_list_avg),
                   '\n|Std Speed:', np.std(v_list_avg),
@@ -663,7 +759,7 @@ if __name__ == "__main__":
                   '\n|Std Offset:', np.std(offset_list_avg))
 
         else:
-            save_threshold = train(success_count)
+            save_threshold = train(env, agent, sce, toolModels, start_epoch)
         
             np.save(os.path.join('store/' + env_name, 'reward_memo'+str(MEMORY_CAPACITY) +
                                       '_epoc'+str(MAX_NUM_EPOC)+'_step' + str(MAX_NUM_STEPS) +
